@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cota 2750 - Protect the forest</title>
+<style>
+  :root {
+    --bg-top: #1f3d2f;
+    --bg-bottom: #0a1c14;
+    --texto: #e8f0e9;
+    --texto-suave: #b9cbbd;
+    --tarjeta: rgba(10, 28, 20, 0.72);
+    --borde: rgba(185, 203, 189, 0.35);
+    --borde-fuerte: rgba(232, 240, 233, 0.8);
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: Georgia, "Times New Roman", serif;
+    color: var(--texto);
+    background: linear-gradient(180deg, var(--bg-top) 0%, var(--bg-bottom) 70%);
+    overflow-x: hidden;
+  }
+  #bosque {
+    position: fixed; inset: 0; width: 100%; height: 100%;
+    z-index: 0; pointer-events: none;
+  }
+  main {
+    position: relative; z-index: 1;
+    min-height: 100%;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: 48px 20px;
+    text-align: center;
+  }
+  h1 {
+    font-size: clamp(2.6rem, 6vw, 4.4rem);
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    text-shadow: 0 2px 24px rgba(0, 0, 0, 0.45);
+  }
+  .sub {
+    margin-top: 10px;
+    font-size: clamp(1rem, 2vw, 1.4rem);
+    color: var(--texto-suave);
+  }
+  .botones {
+    margin-top: 48px;
+    display: flex; flex-wrap: wrap; justify-content: center;
+    gap: 24px;
+    width: 100%; max-width: 1120px;
+  }
+  .boton {
+    flex: 1 1 280px; max-width: 340px;
+    display: block;
+    padding: 24px 22px 26px;
+    color: inherit; text-decoration: none;
+    background: var(--tarjeta);
+    border: 1px solid var(--borde);
+    border-radius: 18px;
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    transition: border-color .2s, background .2s, transform .2s;
+  }
+  .boton:hover { border-color: var(--borde-fuerte); background: rgba(14, 38, 27, 0.85); transform: translateY(-3px); }
+  .boton:focus-visible { outline: 2px solid var(--texto); outline-offset: 3px; }
+  .boton h2 { font-size: 1.55rem; font-weight: 700; }
+  .boton p { margin-top: 6px; font-size: 1.05rem; line-height: 1.35; color: var(--texto-suave); }
+  @media (prefers-reduced-motion: reduce) { .boton { transition: none; } .boton:hover { transform: none; } }
+</style>
+</head>
+<body>
+
+<svg id="bosque" aria-hidden="true" preserveAspectRatio="xMidYMax slice"></svg>
+
+<main>
+  <h1>Protect the forest</h1>
+  <p class="sub">Choose a tool to get started</p>
+
+  <nav class="botones" aria-label="Tools">
+    <a class="boton" href="mapa.html">
+      <h2>Map</h2>
+      <p>Satellite map with fire response routes</p>
+    </a>
+    <a class="boton" href="base/radar.html">
+      <h2>Radar</h2>
+      <p>Wind and heat radar</p>
+    </a>
+    <a class="boton" href="simulador.html">
+      <h2>Fire simulator</h2>
+      <p>Simulate how a fire spreads</p>
+    </a>
+    <a class="boton" href="monitoreo/monitor.html">
+      <h2>Monitoring</h2>
+      <p>Real-time flame</p>
+    </a>
+    <a class="boton" href="suelo%20tipo.html">
+      <h2>Soil type</h2>
+      <p>Fire simulation by soil type</p>
+    </a>
+  </nav>
+</main>
+
+<script>
+  // Forest of triangles (fixed seed so it looks the same on every load)
+  (function () {
+    const W = 1920, H = 900;
+    const svg = document.getElementById('bosque');
+    svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+    let s = 7;
+    const rnd = () => (s = (s * 16807) % 2147483647) / 2147483647;
+    const capas = [
+      { n: 22, alto: [160, 300], color: '#2f5a45', op: 0.35 },
+      { n: 16, alto: [260, 460], color: '#16372a', op: 0.7 },
+      { n: 10, alto: [420, 700], color: '#0b1f16', op: 0.95 }
+    ];
+    let html = '';
+    capas.forEach(c => {
+      for (let i = 0; i < c.n; i++) {
+        const h = c.alto[0] + rnd() * (c.alto[1] - c.alto[0]);
+        const w = h * (0.6 + rnd() * 0.25);
+        const x = rnd() * W;
+        const y = H * (0.55 + rnd() * 0.25);
+        html += '<polygon points="' + x + ',' + (y - h) + ' ' + (x - w / 2) + ',' + y + ' ' + (x + w / 2) + ',' + y +
+                '" fill="' + c.color + '" opacity="' + c.op + '"/>';
+      }
+    });
+    html += '<rect x="0" y="' + (H * 0.72) + '" width="' + W + '" height="' + (H * 0.28) + '" fill="#0a1c14"/>';
+    svg.innerHTML = html;
+  })();
+</script>
+</body>
+</html>
