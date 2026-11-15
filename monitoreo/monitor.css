@@ -1,0 +1,75 @@
+:root {
+  --fondo: #e9ecea;
+  --panel: #f6f7f5;
+  --tinta: #1b2a2f;
+  --suave: #5c6d70;
+  --brasa: #d4501e;
+  --linea: #c3cbc9;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fondo: #141b1d;
+    --panel: #1c2527;
+    --tinta: #e6ece9;
+    --suave: #93a5a6;
+    --linea: #324044;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--fondo);
+  color: var(--tinta);
+  font-family: "Archivo", system-ui, sans-serif;
+}
+main { max-width: 960px; margin: 0 auto; padding: 24px 16px 40px; }
+h1 { font-size: clamp(1.6rem, 4vw, 2.4rem); font-weight: 800; margin: 0 0 6px; letter-spacing: -0.02em; }
+.sub { color: var(--suave); margin: 0 0 18px; max-width: 60ch; }
+
+canvas {
+  width: 100%;
+  height: auto;
+  display: block;
+  background: #0f1a1d;
+  border-radius: 6px;
+}
+
+.datos {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px;
+  margin: 16px 0 8px;
+}
+.dato {
+  background: var(--panel);
+  border: 1px solid var(--linea);
+  border-radius: 6px;
+  padding: 10px 14px;
+}
+.dato.grande { border-color: var(--brasa); }
+.etq { display: block; font-size: 0.8rem; color: var(--suave); }
+output { font-size: 2rem; font-weight: 800; font-variant-numeric: tabular-nums; }
+.grande output { color: var(--brasa); }
+.uni { margin-left: 4px; color: var(--suave); }
+
+.estado { font-weight: 600; margin: 6px 0 16px; min-height: 1.4em; }
+.estado.apagada { color: var(--brasa); }
+
+.controles { display: grid; gap: 14px; }
+label { display: block; font-weight: 600; }
+input[type="range"] { width: 100%; margin-top: 8px; accent-color: var(--brasa); }
+
+.presets { display: flex; flex-wrap: wrap; gap: 8px; }
+button {
+  font: inherit;
+  padding: 8px 14px;
+  border: 1px solid var(--tinta);
+  background: transparent;
+  color: var(--tinta);
+  border-radius: 4px;
+  cursor: pointer;
+}
+button:hover { background: var(--tinta); color: var(--fondo); }
+button:focus-visible, input:focus-visible { outline: 3px solid var(--brasa); outline-offset: 2px; }
+
+.nota { margin-top: 22px; font-size: 0.85rem; color: var(--suave); max-width: 75ch; }

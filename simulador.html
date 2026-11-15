@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<a href="SISTEMA WEB/monitoreo"></a>
+<a href="SISTEMA WEB/base"></a>
+<a href="base/radar.html"></a>
+<a href="monitoreo/monitor.html"></a>
+<a href="mapa.html"></a>
+
+<a href="simulador.html"></a>
+<a href="suelo tipo.html"></a>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cota 2750 - Simulador de incendio</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css">
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+html, body { height:100%; }
+body { font-family:Arial,sans-serif; display:flex; flex-direction:column; background:#10251c; }
+header { background:#7a1a14; color:#fff; padding:6px 12px; font-size:15px; font-weight:bold; }
+#mapa { flex:1; position:relative; }
+#pnl { position:absolute; top:10px; right:10px; z-index:1000; width:310px; max-height:calc(100% - 20px); overflow:auto;
+       background:rgba(255,255,255,.96); border-radius:6px; font-size:12px; color:#222; box-shadow:0 2px 8px rgba(0,0,0,.4); }
+#pnl h3 { background:#b3261e; color:#fff; padding:7px 10px; font-size:13px; cursor:pointer; position:sticky; top:0; z-index:2; }
+#pnl.cerrado #cuerpo { display:none; }
+#cuerpo { padding:8px; }
+#cuerpo label { display:block; margin:5px 0; font-weight:bold; }
+#cuerpo label b { float:right; color:#b3261e; }
+#cuerpo input[type=range], #cuerpo select { width:100%; }
+.chk label { display:inline-block; font-weight:normal; margin:2px 8px 2px 0; }
+.bt button { padding:5px 8px; font-size:12px; cursor:pointer; margin:3px 3px 3px 0; }
+#reloj { text-align:center; font:bold 24px "Courier New",monospace; background:#1b1b1b; color:#ff5a3c; border-radius:6px; padding:6px; margin-bottom:6px; }
+#zq { margin:6px 0; }
+#zq div { background:#fff3e0; border-left:4px solid #ff6d00; padding:4px 6px; margin:3px 0; font-weight:bold; }
+table { width:100%; border-collapse:collapse; margin-top:6px; }
+td { padding:3px 4px; border-bottom:1px solid #ddd; }
+td:last-child { text-align:right; font-weight:bold; }
+.al { background:#fde8e6; border-left:4px solid #b3261e; padding:4px 6px; margin:4px 0; }
+.ley span { display:inline-block; margin-right:8px; }
+.ley i { display:inline-block; width:11px; height:11px; border-radius:2px; margin-right:3px; vertical-align:middle; }
+.nota { color:#555; font-size:11px; line-height:1.4; margin-top:6px; }
+.fl { position:absolute; transform:translate(-50%,-140%); background:#b3261e; color:#fff; padding:2px 8px; border-radius:10px;
+      font-size:12px; font-weight:bold; white-space:nowrap; box-shadow:0 1px 4px rgba(0,0,0,.5); }
+#hov { position:absolute; left:10px; bottom:28px; z-index:1000; background:rgba(0,0,0,.78); color:#fff; font-size:12px; padding:6px 9px; border-radius:6px; pointer-events:none; display:none; line-height:1.5; max-width:270px; }
+#hov b { color:#ffb300; }
+.barra { height:12px; border-radius:6px; margin-top:4px; background:linear-gradient(90deg,#0a0028,#500078,#b4003c,#ff3c00,#ff9600,#ffe63c,#ffffe6); }
+.barra + div { display:flex; justify-content:space-between; font-size:10px; color:#555; }
+#tierra { margin:6px 0; background:#f1f8e9; border-left:4px solid #7cb342; padding:5px 7px; display:none; }
+#tierra div { margin:2px 0; }
+</style>
+</head>
+<body>
+<header>SIMULADOR DE INCENDIO · CALOR · HUMO — Parque Nacional Tunari</header>
+
+
+
+<div id="mapa">
+  <div id="hov"></div>
+  <div id="pnl"><h3 id="tit">SIMULADOR (clic para ocultar)</h3><div id="cuerpo"></div></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const N = 140, CELL = 25;                       // 140x140 celdas de 25 m (3,5 km)
+const DT = 10/60;                               // cada paso = 10 segundos simulados (en minutos)
+const FT = {                                    // ros m/min, br consumo/min, hf calor, sm humo
+  'Pastizal / matorral': { ros:14, br:.30, hf:60,  sm:1.0 },
+  'Bosque':              { ros:4,  br:.10, hf:120, sm:1.5 },
+  'Cultivo':             { ros:8,  br:.20, hf:80,  sm:1.1 },
+  'Riesgo alto de incendio': { ros:20, br:.35, hf:70, sm:1.1 }
+};
+const BASE = ['Pastizal / matorral','Bosque','Cultivo'];
+const FK = Object.keys(FT), FA = FK.map(k => FT[k]);
+const SINCOMB = ['Suelo desnudo / roca','Zona urbana'];
+const ZN = FK.concat(SINCOMB);
+const COL = { 'Bosque':'#2e7d32', 'Pastizal / matorral':'#9ccc65', 'Suelo desnudo / roca':'#8d6e63',
+              'Cultivo':'#fdd835', 'Zona urbana':'#757575', 'Riesgo alto de incendio':'#e53935' };
+const SL = [['vel','Viento (km/h)',0,60,15,1], ['dir','Viento viene de (°)',0,355,270,5],
+            ['hr','Humedad relativa (%)',5,90,30,1], ['temp','Temperatura (°C)',0,45,20,1]];
+const VEL = [[1,'×1 (tiempo real)'],[5,'×5'],[10,'×10'],[30,'×30'],[60,'×60 (1 min por segundo)'],[120,'×120'],[300,'×300']];
+
+// ---------- Panel ----------
+let h = '';
+SL.forEach(([id,t,mn,mx,v,s]) => h += '<label>'+t+' <b id="v_'+id+'">'+v+'</b><input type="range" id="'+id+'" min="'+mn+'" max="'+mx+'" step="'+s+'" value="'+v+'"></label>');
+$('cuerpo').innerHTML =
+  '<div id="reloj">0 h 00 min 00 s</div>' +
+  '<label>Velocidad del tiempo<select id="spd">' + VEL.map(([v,t]) => '<option value="'+v+'"'+(v===10?' selected':'')+'>'+t+'</option>').join('') + '</select></label>' +
+  '<div class="bt"><button id="bPlay">▶ Iniciar</button><button id="bRand">🎲 Incendio aleatorio</button><button id="bReset">↺ Reiniciar</button></div>' +
+  '<div class="chk"><label><input type="checkbox" id="cA"> Focos aleatorios nuevos cada ~5–20 min simulados</label></div>' +
+  '<div id="zq"></div>' +
+  '<div id="tierra"></div>' +
+  '<label>Combustible fuera de zonas<select id="comb">' + BASE.map(k => '<option>'+k+'</option>').join('') + '</select></label>' +
+  h +
+  '<div>Viento hacia: <span id="flecha" style="display:inline-block;font-size:18px;font-weight:bold">↑</span></div>' +
+  '<div class="chk"><b>Capas:</b><br><label><input type="checkbox" id="cF" checked> Fuego</label><label><input type="checkbox" id="cC" checked> Calor</label>' +
+  '<label><input type="checkbox" id="cH" checked> Humo</label><label><input type="checkbox" id="cQ" checked> Quemado</label><label><input type="checkbox" id="cT"> Vista térmica</label><label><input type="checkbox" id="cR"> Relieve</label></div>' +
+  '<div class="bt"><button id="bClima">Clima en vivo</button> <span id="est"></span></div>' +
+  '<div><b>Escala de calor (vista térmica)</b></div><div class="barra"></div><div><span>ambiente</span><span>200 °C</span><span>400 °C</span><span>800 °C</span></div>' +
+  '<div class="nota" id="rel">Relieve: cargando…</div>' +
+  '<div id="alertas"></div><table id="stats"></table>' +
+  '<div class="ley" style="margin-top:6px"><span><i style="background:#e53a10"></i>Fuego</span><span><i style="background:#ff7a00"></i>Calor</span><span><i style="background:#666"></i>Humo</span><span><i style="background:#3a2a20"></i>Quemado</span></div>' +
+  '<div class="nota">Pulsa <b>Iniciar</b> y se enciende solo una zona al azar (o haz clic en el mapa para elegir el foco). Las zonas de <i>suelo tipo.html</i> definen el combustible; roca y urbano no arden.<br>Modelo simplificado (tipo Rothermel/Byram). Úsalo como apoyo visual, no como única base para decidir.</div>';
+
+L.DomEvent.disableClickPropagation($('pnl')); L.DomEvent.disableScrollPropagation($('pnl'));
+$('tit').onclick = () => $('pnl').classList.toggle('cerrado');
+
+// ---------- Mapa ----------
+const centro = [-17.30, -66.28];
+const mapa = L.map('mapa', { zoomControl:false }).setView(centro, 14);
+L.control.zoom({ position:'topleft' }).addTo(mapa);
+const sat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+  { attribution:'© Esri, Maxar, Earthstar Geographics', maxZoom:19 }).addTo(mapa);
+const topo = L.tileLayer('https://tile.opentopomap.org/{z}/{x}/{y}.png', { attribution:'© OpenTopoMap', maxZoom:17 });
+L.control.layers({ 'Satelital':sat, 'Topográfico':topo }, null, { position:'topleft' }).addTo(mapa);
+L.control.scale({ imperial:false }).addTo(mapa);
+
+const half = N*CELL/2, dLat = half/111320, dLng = half/(111320*Math.cos(centro[0]*Math.PI/180));
+const bounds = [[centro[0]-dLat, centro[1]-dLng], [centro[0]+dLat, centro[1]+dLng]];
+L.rectangle(bounds, { color:'#fff', weight:1, dashArray:'5 5', fill:false, interactive:false }).addTo(mapa);
+const cv = document.createElement('canvas'); cv.width = cv.height = N;
+const cx = cv.getContext('2d'), img = cx.createImageData(N, N);
+const ov = L.imageOverlay(cv.toDataURL(), bounds, { interactive:false }).addTo(mapa);
+const cellLL = (x,y) => L.latLng(bounds[1][0] - (y+.5)/N*2*dLat, bounds[0][1] + (x+.5)/N*2*dLng);
+
+// ---------- Terreno ----------
+const seed = Math.random()*100;
+const rnd = (i,j,s) => { const x = Math.sin(i*127.1 + j*311.7 + s*74.7)*43758.5453; return x - Math.floor(x); };
+function noise(x,y,s) {
+  const i = Math.floor(x), j = Math.floor(y), fx = x-i, fy = y-j, u = fx*fx*(3-2*fx), v = fy*fy*(3-2*fy);
+  const a = rnd(i,j,s), b = rnd(i+1,j,s), c = rnd(i,j+1,s), d = rnd(i+1,j+1,s);
+  return a + (b-a)*u + (c-a)*v + (a-b-c+d)*u*v;
+}
+const load = new Float32Array(N*N);
+for (let y=0;y<N;y++) for (let x=0;x<N;x++) {
+  const n = .6*noise(x/18,y/18,seed) + .4*noise(x/7,y/7,seed+9);
+  load[y*N+x] = n < .3 ? 0 : Math.min(1, .45 + (n-.3)*1.4);
+}
+
+// ---------- Estado ----------
+const st = new Uint8Array(N*N);                 // 0 sin quemar, 1 ardiendo, 2 quemado, 3 sin combustible
+const fuel = new Float32Array(N*N), fire = new Float32Array(N*N), heat = new Float32Array(N*N), smoke = new Float32Array(N*N);
+const tmp = new Float32Array(N*N);
+const ftc = new Uint8Array(N*N), zonaTipo = new Uint8Array(N*N), zonaId = new Uint8Array(N*N);
+const elev = new Float32Array(N*N), gxA = new Float32Array(N*N), gyA = new Float32Array(N*N), pend = new Float32Array(N*N), hsh = new Float32Array(N*N);
+let zonasInfo = [], polZ = [];
+let t = 0, acc = 0, running = false, last = 0, lastSt = 0, lastR = 0, nextRand = Infinity;
+
+function terreno(i) {
+  const z = zonaTipo[i]; let l = load[i], k = FK.indexOf($('comb').value);
+  if (z) { const nom = ZN[z-1]; if (SINCOMB.includes(nom)) l = 0; else { l = Math.max(.5, l); k = FK.indexOf(nom); } }
+  fuel[i] = l; st[i] = l > 0 ? 0 : 3; ftc[i] = k;
+}
+function aplicarTerreno() { for (let i=0;i<N*N;i++) if (st[i] === 0 || st[i] === 3) terreno(i); }
+
+// ---------- Relieve: pendiente y sombreado ----------
+function calcPendiente() {
+  for (let y=0;y<N;y++) for (let x=0;x<N;x++) {
+    const i = y*N+x, xa = Math.max(0,x-1), xb = Math.min(N-1,x+1), ya = Math.max(0,y-1), yb = Math.min(N-1,y+1);
+    const gx = (elev[y*N+xb]-elev[y*N+xa])/((xb-xa)*CELL), gy = (elev[yb*N+x]-elev[ya*N+x])/((yb-ya)*CELL);
+    gxA[i] = gx; gyA[i] = gy; pend[i] = 100*Math.hypot(gx,gy);
+    hsh[i] = (gx*.5 + gy*.5 + .7)/(Math.sqrt(gx*gx+gy*gy+1)*.995) - .7035;
+  }
+}
+function relieveSintetico() {
+  for (let y=0;y<N;y++) for (let x=0;x<N;x++)
+    elev[y*N+x] = 3000 + 260*noise(x/45,y/45,seed+3) + 60*noise(x/12,y/12,seed+5) + (N-y)*1.2;
+  calcPendiente();
+}
+async function cargarRelieve() {
+  const M = 15, la = [], lo = [];
+  for (let j=0;j<M;j++) for (let i=0;i<M;i++) {
+    la.push((bounds[1][0] - j/(M-1)*2*dLat).toFixed(5)); lo.push((bounds[0][1] + i/(M-1)*2*dLng).toFixed(5));
+  }
+  try {
+    const E = [];
+    for (let k=0;k<la.length;k+=75) {
+      const a = la.slice(k,k+75), b = lo.slice(k,k+75);
+      const r = await (await fetch('https://api.open-meteo.com/v1/elevation?latitude='+a.join(',')+'&longitude='+b.join(','))).json();
+      if (!r.elevation || r.elevation.length !== a.length) throw 0;
+      E.push(...r.elevation);
+    }
+    for (let y=0;y<N;y++) for (let x=0;x<N;x++) {
+      const u = x/(N-1)*(M-1), v = y/(N-1)*(M-1), i0 = Math.min(M-2,Math.floor(u)), j0 = Math.min(M-2,Math.floor(v)), fu = u-i0, fv = v-j0;
+      elev[y*N+x] = (E[j0*M+i0]*(1-fu) + E[j0*M+i0+1]*fu)*(1-fv) + (E[(j0+1)*M+i0]*(1-fu) + E[(j0+1)*M+i0+1]*fu)*fv;
+    }
+    for (let k=0;k<4;k++) diffuse(elev, .9);
+    calcPendiente(); $('rel').textContent = 'Relieve: elevación real (Open-Meteo)'; render(); stats();
+  } catch (e) { $('rel').textContent = 'Relieve: simulado (sin conexión a la elevación real)'; }
+}
+
+// ---------- Reloj ----------
+const simSec = () => t*DT*60 + acc*60;
+function fmt(s) {
+  s = Math.floor(s); const hh = Math.floor(s/3600), m = Math.floor(s%3600/60), x = s%60;
+  return hh + ' h ' + String(m).padStart(2,'0') + ' min ' + String(x).padStart(2,'0') + ' s';
+}
+const agendar = () => { nextRand = $('cA').checked ? simSec() + 300 + Math.random()*900 : Infinity; };
+
+function reset() {
+  running = false; $('bPlay').textContent = '▶ Iniciar';
+  for (let i=0;i<N*N;i++) { terreno(i); fire[i] = heat[i] = smoke[i] = 0; }
+  t = 0; acc = 0; agendar(); $('reloj').textContent = fmt(0); render(); stats();
+}
+
+// ---------- Ignición ----------
+function igniteCells(x,y) {
+  for (let dy=-1; dy<=1; dy++) for (let dx=-1; dx<=1; dx++) {
+    const xx = x+dx, yy = y+dy; if (xx<0||yy<0||xx>=N||yy>=N) continue;
+    const i = yy*N+xx; if (st[i] === 0) { st[i] = 1; fire[i] = .6; }
+  }
+}
+const hayFuego = () => { for (let i=0;i<N*N;i++) if (st[i] === 1) return true; return false; };
+
+function randomFire() {
+    function randomFire() {
+  const libres = [];
+
+  for (let i = 0; i < N*N; i++) {
+    if (st[i] === 0) {
+      libres.push(i);
+    }
+  }
+
+  if (!libres.length) {
+    $('est').textContent = 'No hay celdas disponibles';
+    return false;
+  }
+
+  const i = libres[Math.floor(Math.random() * libres.length)];
+
+  const x = i % N;
+  const y = Math.floor(i / N);
+  const ll = cellLL(x, y);
+
+  igniteCells(x, y);
+
+  const el = document.createElement('div');
+  el.className = 'fl';
+  el.textContent = '📍 Punto aleatorio';
+
+  const mk = L.marker(ll, {
+    icon: L.divIcon({
+      className: '',
+      html: el,
+      iconSize: [0, 0]
+    }),
+    interactive: false
+  }).addTo(mapa);
+
+  setTimeout(() => mapa.removeLayer(mk), 9000);
+
+  render();
+  stats();
+
+  return true;
+}
+}
+
+mapa.on('click', e => {
+  const x = Math.floor((e.latlng.lng - bounds[0][1])/(2*dLng)*N), y = Math.floor((bounds[1][0] - e.latlng.lat)/(2*dLat)*N);
+  if (x < 0 || y < 0 || x >= N || y >= N) { $('est').textContent = 'Fuera del recuadro'; return; }
+  $('est').textContent = ''; igniteCells(x,y); render(); stats(); if (!running) play();
+});
+
+// ---------- Transporte de calor y humo ----------
+function advect(a, vx, vy) {
+  for (let y=0;y<N;y++) for (let x=0;x<N;x++) {
+    const sx = x-vx, sy = y-vy, x0 = Math.floor(sx), y0 = Math.floor(sy); let v = 0;
+    if (x0>=0 && y0>=0 && x0<N-1 && y0<N-1) {
+      const fx = sx-x0, fy = sy-y0, i = y0*N+x0;
+      v = (a[i]*(1-fx) + a[i+1]*fx)*(1-fy) + (a[i+N]*(1-fx) + a[i+N+1]*fx)*fy;
+    }
+    tmp[y*N+x] = v;
+  }
+  a.set(tmp);
+}
+function diffuse(a, k) {
+  for (let y=0;y<N;y++) for (let x=0;x<N;x++) {
+    const i = y*N+x, c = a[i];
+    tmp[i] = c*(1-k) + k*((x>0?a[i-1]:c) + (x<N-1?a[i+1]:c) + (y>0?a[i-N]:c) + (y<N-1?a[i+N]:c))/4;
+  }
+  a.set(tmp);
+}
+
+// ---------- Un paso = 10 segundos simulados ----------
+const NB = [[-1,-1],[0,-1],[1,-1],[-1,0],[1,0],[-1,1],[0,1],[1,1]];
+function step() {
+  const vel = +$('vel').value, dir = +$('dir').value, hr = +$('hr').value, tp = +$('temp').value;
+  const b = ((dir+180)%360)*Math.PI/180, wx = Math.sin(b), wy = -Math.cos(b);
+  const fH = Math.min(3, Math.max(.05, Math.exp(-.035*(hr-30)))), fT = Math.max(.5, 1 + .02*(tp-20));
+  const nuevos = [];
+  for (let y=0;y<N;y++) for (let x=0;x<N;x++) {
+    const i = y*N+x; if (st[i] !== 1) continue;
+    const F = FA[ftc[i]];
+    fire[i] = Math.min(1, fire[i] + 1.2*DT);
+    fuel[i] -= F.br*DT*(.7 + .3*fire[i]);
+    if (fuel[i] <= .02) { st[i] = 2; fire[i] = 0; continue; }
+    fire[i] = Math.min(fire[i], .3 + fuel[i]*2.8);
+    heat[i] += fire[i]*F.hf*DT;
+    smoke[i] += fire[i]*F.sm*(.6 + hr/100)*DT;
+    if (fire[i] < .4) continue;
+    for (const [dx,dy] of NB) {
+      const xx = x+dx, yy = y+dy; if (xx<0||yy<0||xx>=N||yy>=N) continue;
+      const j = yy*N+xx; if (st[j] !== 0) continue;
+      const len = Math.hypot(dx,dy), cs = (dx*wx + dy*wy)/len;
+      const fW = Math.min(10, Math.exp(.06*vel*cs));
+      const sl = (gxA[i]*dx + gyA[i]*dy)/len, fS = Math.min(6, Math.max(.25, Math.exp(3.5*sl)));   // ladera arriba arde más rápido
+      const fP = 1 + Math.min(3, heat[j]/150);                                                    // el calor precalienta el combustible
+      const p = Math.min(.9, .5*F.ros*(.5 + .5*fuel[j])*fW*fS*fP*fH*fT/(len*CELL)*DT);
+      if (Math.random() < p) nuevos.push(j);
+    }
+  }
+  nuevos.forEach(j => { if (st[j] === 0) { st[j] = 1; fire[j] = .3; } });
+
+  const wc = vel*1000/60/CELL*DT;               // celdas por paso
+  advect(smoke, wc*.25*wx, wc*.25*wy); diffuse(smoke, 1 - Math.pow(.8, DT));
+  advect(heat,  wc*.08*wx, wc*.08*wy); diffuse(heat, 1 - Math.pow(.75, DT));
+  const ds = Math.pow(.985, DT), dh = Math.pow(.82, DT);
+  for (let i=0;i<N*N;i++) { smoke[i] *= ds; heat[i] *= dh; }
+  t++;
+}
+
+// ---------- Dibujo ----------
+const PAL = [[0,[10,0,40]],[.15,[80,0,120]],[.3,[180,0,60]],[.5,[255,60,0]],[.7,[255,150,0]],[.85,[255,230,60]],[1,[255,255,230]]];
+function termico(T, amb) {                       // paleta de cámara térmica (0 a 800 °C sobre el ambiente)
+  const u = Math.max(0, Math.min(1, (T-amb)/800));
+  for (let k=1;k<PAL.length;k++) if (u <= PAL[k][0]) {
+    const p = PAL[k-1], q = PAL[k], f = (u-p[0])/(q[0]-p[0]);
+    return [p[1][0]+(q[1][0]-p[1][0])*f, p[1][1]+(q[1][1]-p[1][1])*f, p[1][2]+(q[1][2]-p[1][2])*f];
+  }
+  return PAL[PAL.length-1][1];
+}
+const tcell = (i, amb) => amb + heat[i] + (st[i] === 1 ? fire[i]*450 : 0);   // temperatura de la celda
+let R, G, B, A;
+function over(r,g,b,a) { R = r*a + R*(1-a); G = g*a + G*(1-a); B = b*a + B*(1-a); A = a + A*(1-a); }
+function render() {
+  const d = img.data, sF = $('cF').checked, sC = $('cC').checked, sH = $('cH').checked, sQ = $('cQ').checked,
+        sT = $('cT').checked, sR = $('cR').checked, amb = +$('temp').value;
+  for (let i=0;i<N*N;i++) {
+    R = G = B = A = 0;
+    if (sR) { const v = hsh[i]; if (v < 0) over(0,0,0, Math.min(.55, -v*1.8)); else over(255,255,255, Math.min(.35, v*1.2)); }
+    if (sQ) { if (st[i] === 2) over(40,28,20,.6); else if (st[i] === 3) over(200,200,200,.18); }
+    if (sT) {
+      const c = termico(tcell(i,amb), amb); over(c[0], c[1], c[2], .85);
+    } else {
+      if (sC && heat[i] > 2) { const k = Math.min(1, heat[i]/400); over(255, 60+140*k, 30*k, Math.min(.65, heat[i]/260)); }
+      if (sF && st[i] === 1) {
+        const f = Math.max(0, Math.min(1, fire[i] + (Math.random()-.5)*.25));
+        if (f < .5) { const k = f/.5; over(190+65*k, 20+80*k, 10-10*k, .9); }
+        else { const k = (f-.5)/.5; over(255, 100+125*k, 70*k, .9); }
+      }
+      if (sH && smoke[i] > .05) over(70,70,70, Math.min(.8, 1 - Math.exp(-smoke[i]*.2)));
+    }
+    const o = i*4;
+    if (A > .003) { d[o] = R/A; d[o+1] = G/A; d[o+2] = B/A; d[o+3] = A*255; } else d[o+3] = 0;
+  }
+  cx.putImageData(img, 0, 0);
+  ov.setUrl(cv.toDataURL());
+}
+
+// ---------- Estadísticas, tierra y zona en llamas ----------
+const clase = p => p < 10 ? 'plana' : p < 25 ? 'moderada' : p < 45 ? 'empinada' : 'muy empinada';
+const EM = { 'Bosque':'🌲', 'Pastizal / matorral':'🌾', 'Cultivo':'🌱', 'Riesgo alto de incendio':'⚠️' };
+function stats() {
+  let ard = 0, qm = 0, mh = 0, mf = 0, ms = 0, sp = 0, spMax = 0, eMin = 1e9, eMax = -1e9;
+  const amb = +$('temp').value;
+  const zb = new Int32Array(256), zq = new Int32Array(256), zp = new Float32Array(256), tb = {};
+  for (let i=0;i<N*N;i++) {
+    const z = zonaId[i];
+    if (st[i] === 1) {
+      ard++; zb[z]++; zq[z]++; zp[z] += pend[i];
+      const k = FK[ftc[i]]; tb[k] = (tb[k] || 0) + 1;
+      sp += pend[i]; if (pend[i] > spMax) spMax = pend[i];
+      if (elev[i] < eMin) eMin = elev[i]; if (elev[i] > eMax) eMax = elev[i];
+      const tf = heat[i] + fire[i]*450; if (tf > mf) mf = tf;
+    } else if (st[i] === 2) { qm++; zq[z]++; }
+    if (heat[i] > mh) mh = heat[i]; if (smoke[i] > ms) ms = smoke[i];
+  }
+  const ha = (ard+qm)*CELL*CELL/10000, pm = Math.round(ms*60), tmax = Math.round(amb + mh);
+  let zl = '';
+  zonasInfo.forEach((z,k) => {
+    const ardiendo = zb[k+1] > 0;
+    polZ[k].setStyle(ardiendo ? { color:'#ff1a1a', weight:4, fillOpacity:.25 } : { color:COL[z.tipo] || '#fff', weight:2, fillOpacity:.12 });
+    if (ardiendo) { const pz = zp[k+1]/zb[k+1];
+      zl += '<div>🔥 ' + esc(z.nombre) + ' · ' + esc(z.tipo) + ' — ' + Math.round(zq[k+1]/Math.max(1,z.n)*100) + '% quemada · pendiente ' + Math.round(pz) + '% (' + clase(pz) + ')</div>'; }
+  });
+  if (zb[0] > 0) zl += '<div>🔥 Terreno base (fuera de zonas)</div>';
+  $('zq').innerHTML = zl ? '<b>Zona en llamas:</b>' + zl : '';
+  let tl = '';
+  if (ard) {
+    Object.keys(tb).forEach(k => tl += '<div>' + (EM[k] || '🔥') + ' <b>' + esc(k) + '</b> — ' + (tb[k]*CELL*CELL/10000).toFixed(2) + ' ha ardiendo</div>');
+    const pmn = sp/ard;
+    tl += '<div>⛰️ Pendiente: <b>' + pmn.toFixed(0) + '%</b> promedio (' + clase(pmn) + '), máx. ' + spMax.toFixed(0) + '%</div>';
+    tl += '<div>📏 Elevación: ' + Math.round(eMin) + '–' + Math.round(eMax) + ' m s. n. m.</div>';
+  }
+  $('tierra').style.display = tl ? 'block' : 'none';
+  $('tierra').innerHTML = tl ? '<b>Tierra que se está quemando:</b>' + tl : '';
+  const r = (a,b) => '<tr><td>'+a+'</td><td>'+b+'</td></tr>';
+  $('stats').innerHTML =
+    r('Área afectada', ha.toFixed(1)+' ha') +
+    r('Frente activo', (ard*CELL*CELL/10000).toFixed(1)+' ha') +
+    r('Temp. de llama máx.', ard ? Math.round(amb + mf)+' °C' : '—') +
+    r('Calor máx. (aire cercano)', tmax+' °C') +
+    r('Humo máx. (aprox.)', pm.toLocaleString('es-BO')+' µg/m³');
+  const al = [];
+  if (pm > 150) al.push('Humo peligroso: usar respirador.');
+  if (tmax > 300) al.push('Calor extremo cerca del frente: mantener distancia.');
+  if (+$('vel').value > 40) al.push('Viento fuerte (>40 km/h): riesgo de saltos de fuego.');
+  if (+$('hr').value < 20) al.push('Humedad muy baja (<20%): combustible muy seco.');
+  if (ard === 0 && t > 0) al.push('No quedan celdas ardiendo: el fuego se extinguió.');
+  $('alertas').innerHTML = al.map(x => '<div class="al">'+x+'</div>').join('');
+}
+
+// ---------- Bucle de tiempo ----------
+function loop(now) {
+  if (!running) return;
+  const dr = Math.min(.25, (now-last)/1000); last = now;
+  acc += dr*(+$('spd').value)/60;               // minutos simulados acumulados
+  let n = 0;
+  while (acc >= DT && n < 60) { step(); acc -= DT; n++; }
+  if (n >= 60) acc = 0;
+  const s = simSec();
+  $('reloj').textContent = fmt(s);
+  if (n || now - lastR > 140) { render(); lastR = now; }
+  if (now - lastSt > 300) { stats(); lastSt = now; }
+  if (s >= nextRand) { randomFire(); agendar(); }
+  requestAnimationFrame(loop);
+}
+function play() {
+  if (running) { running = false; $('bPlay').textContent = '▶ Iniciar'; return; }
+  if (!hayFuego() && !randomFire()) return;
+  running = true; $('bPlay').textContent = '⏸ Pausa'; last = performance.now(); requestAnimationFrame(loop);
+}
+
+// ---------- Controles ----------
+$('bPlay').onclick = play;
+$('bRand').onclick = () => { if (randomFire() && !running) play(); };
+$('bReset').onclick = reset;
+$('cA').addEventListener('change', agendar);
+SL.forEach(([id]) => $(id).addEventListener('input', () => {
+  $('v_'+id).textContent = $(id).value;
+  if (id === 'dir') $('flecha').style.transform = 'rotate(' + ((+$('dir').value + 180)%360) + 'deg)';
+  stats();
+}));
+['cF','cC','cH','cQ','cT','cR'].forEach(id => $(id).addEventListener('change', render));
+$('comb').addEventListener('change', aplicarTerreno);
+$('flecha').style.transform = 'rotate(90deg)';
+
+$('bClima').onclick = async () => {
+  $('est').textContent = 'Consultando…';
+  try {
+    const w = await (await fetch('https://api.open-meteo.com/v1/forecast?latitude='+centro[0]+'&longitude='+centro[1]+'&current=temperature_2m,relative_humidity_2m,wind_speed_10m,wind_direction_10m&wind_speed_unit=kmh')).json();
+    const k = w.current;
+    [['temp',k.temperature_2m],['hr',k.relative_humidity_2m],['vel',k.wind_speed_10m],['dir',Math.round(k.wind_direction_10m/5)*5]].forEach(([id,v]) => {
+      $(id).value = v; $('v_'+id).textContent = $(id).value;
+    });
+    $('flecha').style.transform = 'rotate(' + ((+$('dir').value + 180)%360) + 'deg)';
+    $('est').textContent = 'Datos de ' + new Date().toLocaleTimeString('es-BO');
+  } catch (e) { $('est').textContent = 'Sin conexión: ajusta a mano'; }
+  stats();
+};
+
+// ---------- Zonas recibidas desde suelo tipo.html (a través de juntos.html) ----------
+const grupoZ = L.featureGroup().addTo(mapa);
+function pip(la, lo, p) {
+  let dentro = false;
+  for (let a=0, b=p.length-1; a<p.length; b=a++) {
+    const yi = p[a][0], xi = p[a][1], yj = p[b][0], xj = p[b][1];
+    if (((yi > la) !== (yj > la)) && (lo < (xj-xi)*(la-yi)/(yj-yi) + xi)) dentro = !dentro;
+  }
+  return dentro;
+}
+window.addEventListener('message', e => {
+  if (e.source !== window.parent || !e.data || e.data.msg !== 'zonas') return;
+  grupoZ.clearLayers(); zonaTipo.fill(0); zonaId.fill(0); zonasInfo = []; polZ = [];
+  e.data.data.slice(0,250).forEach((z,k) => {
+    polZ.push(L.polygon(z.pts, { color:COL[z.tipo] || '#fff', weight:2, fillOpacity:.12, interactive:false }).addTo(grupoZ));
+    zonasInfo.push({ nombre:z.nombre, tipo:z.tipo, n:0 });
+    const zi = ZN.indexOf(z.tipo) + 1; if (!zi) return;
+    for (let y=0;y<N;y++) for (let x=0;x<N;x++) {
+      const la = bounds[1][0] - (y+.5)/N*2*dLat, lo = bounds[0][1] + (x+.5)/N*2*dLng;
+      if (pip(la, lo, z.pts)) { zonaTipo[y*N+x] = zi; zonaId[y*N+x] = k+1; }
+    }
+  });
+  for (let i=0;i<N*N;i++) if (zonaId[i]) zonasInfo[zonaId[i]-1].n++;
+  aplicarTerreno(); render(); stats();
+});
+
+// ---------- Información al pasar el cursor ----------
+mapa.on('mousemove', e => {
+  const hv = $('hov'), x = Math.floor((e.latlng.lng - bounds[0][1])/(2*dLng)*N), y = Math.floor((bounds[1][0] - e.latlng.lat)/(2*dLat)*N);
+  if (x < 0 || y < 0 || x >= N || y >= N) { hv.style.display = 'none'; return; }
+  const i = y*N+x, amb = +$('temp').value, z = zonaId[i] ? zonasInfo[zonaId[i]-1] : null;
+  const zona = z ? esc(z.nombre) + ' · ' + esc(z.tipo) : 'Terreno base';
+  const comb = st[i] === 3 ? 'sin combustible' : esc(FK[ftc[i]]);
+  hv.innerHTML = '<b>' + zona + '</b><br>Combustible: ' + comb + '<br>Estado: ' + ['Sin quemar','🔥 Ardiendo','Quemado','Sin combustible'][st[i]] +
+    '<br>Pendiente: ' + pend[i].toFixed(0) + '% (' + clase(pend[i]) + ')<br>Elevación: ' + Math.round(elev[i]) + ' m' +
+    '<br>Temperatura: <b>' + Math.round(tcell(i,amb)) + ' °C</b><br>Humo: ' + Math.round(smoke[i]*60) + ' µg/m³';
+  hv.style.display = 'block';
+});
+mapa.on('mouseout', () => { $('hov').style.display = 'none'; });
+
+relieveSintetico();
+reset();
+cargarRelieve();
+window.parent.postMessage({ msg:'listo' }, '*');
+</script>
+</body>
+</html>

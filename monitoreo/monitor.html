@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <a href="SISTEMA WEB/base"></a>
+  <a href="SISTEMA WEB/monitoreo"></a>
+  <a href="monitor.html"></a>
+  <a href="../base/radar.html"></a>
+  <a href="../mapa.html" ></a>
+  <a href="../suelo tipo.html" ></a>
+  <a href="../simulador.html" ></a>
+  <a href="../rutas.html"></a>
+
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Simulador de llama en tiempo real</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="monitor.css">
+  
+</head>
+<body>
+  
+  
+  <main>
+    <h1>Llama sobre una tira de combustible</h1>
+    <p class="sub">Cambia el oxígeno o la presión y mira cómo cambian el tamaño de la llama y su velocidad de propagación.</p>
+
+    <canvas id="escena" width="900" height="340" aria-label="Simulación de la llama"></canvas>
+
+    <section class="datos" aria-live="polite">
+      <div class="dato"><span class="etq">Concentración de oxígeno</span><output id="outO2">21.0</output><span class="uni">%</span></div>
+      <div class="dato"><span class="etq">Presión ambiental</span><output id="outP">101.3</output><span class="uni">kPa</span></div>
+      <div class="dato"><span class="etq">Presión parcial de O₂</span><output id="outPO2">21.3</output><span class="uni">kPa</span></div>
+      <div class="dato grande"><span class="etq">Diámetro de la llama</span><output id="outD">10.0</output><span class="uni">mm</span></div>
+      <div class="dato grande"><span class="etq">Velocidad de propagación</span><output id="outV">1.00</output><span class="uni">cm/s</span></div>
+      <div class="dato grande"><span class="etq">Concentración de humo</span><output id="outHumo">0.00</output><span class="uni">mg/m³</span></div>
+      <div class="dato"><span class="etq">Producción de humo</span><output id="outProd">0.00</output><span class="uni">mg/s</span></div>
+      <div class="dato"><span class="etq">Distancia quemada</span><output id="outDist">0.0</output><span class="uni">cm</span></div>
+    </section>
+
+    <p id="estado" class="estado">Llama estable</p>
+
+    <section class="controles">
+      <label>Concentración de oxígeno: <b id="lblO2">21%</b>
+        <input id="inO2" type="range" min="10" max="100" step="0.5" value="21">
+      </label>
+      <label>Presión ambiental: <b id="lblP">101.3 kPa</b>
+        <input id="inP" type="range" min="20" max="200" step="0.5" value="101.3">
+      </label>
+      <label>Ventilación del recinto (2 m³): <b id="lblVent">0.010 1/s</b>
+        <input id="inVent" type="range" min="0" max="0.05" step="0.001" value="0.01">
+      </label>
+      <div class="presets">
+        <button data-o2="21" data-p="101.3">Aire, nivel del mar</button>
+        <button data-o2="21" data-p="65">Altiplano (3 600 m)</button>
+        <button data-o2="40" data-p="101.3">Aire enriquecido</button>
+        <button data-o2="100" data-p="101.3">Oxígeno puro</button>
+        <button id="reiniciar">Reiniciar tira</button>
+      </div>
+    </section>
+
+    <p class="nota">Modelo empírico y simplificado: v = v₀·(X/0.21)<sup>1.6</sup>·(P/101.3)<sup>0.5</sup> y D = D₀·(X/0.21)<sup>−0.2</sup>·(P/101.3)<sup>−0.33</sup>. Con presión parcial de O₂ menor a 12 kPa la llama se apaga. El humo se produce en proporción a la masa quemada, con más rendimiento cuando hay poco oxígeno (combustión incompleta), y se acumula en un recinto de 2 m³ con dC/dt = producción/volumen − ventilación·C. Sirve para visualizar tendencias, no para cálculos de seguridad.</p>
+  </main>
+  <script src="monitor.js"></script>
+</body>
+</html>

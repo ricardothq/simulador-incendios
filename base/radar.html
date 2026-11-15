@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<a href="SISTEMA WEB/base"></a>
+<a href="SISTEMA WEB/monitoreo"></a>
+<a href="../mapa.html" ></a>
+<a href="../suelo tipo.html" ></a>
+<a href="../simulador.html"></a>
+<a href="../monitoreo/monitor.html"></a>
+
+<a href="radar.html"></a>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cota 2750 - Radar, viento y calor</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+html, body { height:100%; }
+body { font-family:Arial,sans-serif; background:#0b1a13; display:flex; flex-direction:column; }
+header { background:#123d2a; color:#fff; padding:10px 14px; display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; }
+header h2 { font-size:18px; }
+header p { margin-top:2px; font-size:12px; opacity:.85; }
+header a { color:#fff; background:#1f6b47; padding:7px 12px; border-radius:6px; text-decoration:none; font-size:13px; }
+#mapa { flex:1; width:100%; }
+footer { background:#123d2a; color:#fff; text-align:center; padding:8px; font-size:12px; }
+.panel { background:rgba(10,30,20,.93); color:#fff; padding:10px 12px; border-radius:8px; font-size:12px; box-shadow:0 2px 8px rgba(0,0,0,.5); width:265px; line-height:1.5; max-height:82vh; overflow:auto; }
+.panel h4 { font-size:13px; margin:10px 0 3px; color:#8fe3b5; }
+.panel h4:first-child { margin-top:0; }
+.panel h4.mod { color:#ffc36b; }
+.panel label { display:block; cursor:pointer; }
+.panel input[type=range] { width:100%; }
+.panel button { background:#1f6b47; color:#fff; border:0; padding:6px 10px; border-radius:5px; cursor:pointer; font-size:12px; margin:6px 4px 0 0; }
+.nota { opacity:.78; font-size:11px; margin-top:3px; }
+.marcador-cota { background:#ff5a1f; border:3px solid #fff; border-radius:50%; width:18px; height:18px; box-shadow:0 0 0 4px rgba(255,90,31,.35); }
+.etq { background:rgba(0,0,0,.65); color:#fff; border-radius:4px; padding:0 4px; font-size:10px; white-space:nowrap; transform:translate(10px,-4px); }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h2>RADAR, VIENTO Y CALOR - COTA 2750</h2>
+    <p>Parque Nacional Tunari | Cochabamba - Bolivia</p>
+  </div>
+  <a href="SISTEMA WEB/monitoreo"></a>
+</header>
+<div id="mapa"></div>
+<footer>Sistema de monitoreo y prevención de incendios forestales</footer>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+/* =================== CONFIGURACIÓN =================== */
+const centro = [-17.30, -66.28];
+const REFRESCO_MIN = 5;
+// Su propia estación (opcional): URL de SU servidor que devuelva JSON:
+// {"lat":-17.30,"lon":-66.28,"temp":24.5,"hum":40,"viento_kmh":18,"dir":270,"rafaga_kmh":30,"hora":"2026-11-15T14:30:00-04:00"}
+const ESTACION_URL = '';
+
+const esri = 'https://server.arcgisonline.com/ArcGIS/rest/services/';
+const satelite = L.tileLayer(esri + 'World_Imagery/MapServer/tile/{z}/{y}/{x}',
+  { attribution: '© Esri, Maxar, Earthstar Geographics', maxZoom: 20, maxNativeZoom: 18 });
+const etiquetas = L.tileLayer(esri + 'Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', { maxZoom: 20, maxNativeZoom: 18 });
+
+const mapa = L.map('mapa', { center: centro, zoom: 8, layers: [satelite, etiquetas], zoomControl: false, maxZoom: 20 });
+L.control.zoom({ position: 'topleft' }).addTo(mapa);
+L.control.scale({ metric: true, imperial: false }).addTo(mapa);
+L.marker(centro, { icon: L.divIcon({ className: '', html: '<div class="marcador-cota"></div>', iconSize: [18, 18], iconAnchor: [9, 9] }) })
+  .addTo(mapa).bindPopup('<b>Sector de estudio - Cota 2750</b>');
+
+const hora = ms => new Date(ms).toLocaleString('es-BO', { timeZone: 'America/La_Paz', hour12: false, day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+const color = v => v < 10 ? '#7fd1ff' : v < 20 ? '#7dff9b' : v < 30 ? '#ffe44d' : v < 45 ? '#ff9a3c' : '#ff4d4d';
+const flecha = (kmh, dir) => {
+  const s = 18 + Math.min(kmh, 50) * .5, vrb = dir == null || isNaN(dir);
+  const html = vrb ? '<div style="width:16px;height:16px;border-radius:50%;background:' + color(kmh) + ';border:2px solid #000"></div>'
+    : '<svg width="' + s + '" height="' + s + '" viewBox="0 0 24 24" style="transform:rotate(' + (dir + 180) + 'deg)"><path d="M12 2 L19 20 L12 16 L5 20 Z" fill="' + color(kmh) + '" stroke="#000" stroke-width="1.2"/></svg>';
+  return L.divIcon({ className: '', html, iconSize: [s, s], iconAnchor: [s / 2, s / 2] });
+};
+const CARD = ['N','NE','E','SE','S','SO','O','NO'], rumbo = g => CARD[Math.round(g / 45) % 8];
+
+/* =================== SATÉLITE NASA GIBS (WMS) =================== */
+const WMS = 'https://gibs.earthdata.nasa.gov/wms/epsg3857/best/wms.cgi';
+const satLayers = [];
+function capaWMS(nombre, opciones) {
+  const l = L.tileLayer.wms(WMS, Object.assign({ layers: nombre, format: 'image/png', transparent: true, opacity: .65,
+    maxZoom: 20, attribution: 'NASA GIBS' }, opciones));
+  satLayers.push(l); return l;
+}
+const iso10 = minAtras => { const d = new Date(Date.now() - minAtras * 60000); d.setUTCMinutes(Math.floor(d.getUTCMinutes() / 10) * 10, 0, 0); return d.toISOString().slice(0, 19) + 'Z'; };
+const dia = n => new Date(Date.now() - n * 86400000).toISOString().slice(0, 10);
+
+const grupoIR = L.layerGroup(), grupoNubes = L.layerGroup(), grupoLST = L.layerGroup();
+const grupoFocos = L.layerGroup().addTo(mapa);
+function cargarSatelite() {
+  grupoIR.clearLayers(); grupoNubes.clearLayers(); grupoLST.clearLayers(); grupoFocos.clearLayers();
+  const t = iso10(50);   // GOES llega con ~40-50 min de retraso
+  grupoIR.addLayer(capaWMS('GOES-East_ABI_Band13_Clean_Infrared', { TIME: t }));
+  grupoNubes.addLayer(capaWMS('GOES-East_ABI_GeoColor', { TIME: t, format: 'image/jpeg', transparent: false }));
+  grupoLST.addLayer(capaWMS('MODIS_Terra_Land_Surface_Temp_Day', { TIME: dia(1) }));
+  grupoFocos.addLayer(capaWMS('VIIRS_SNPP_Thermal_Anomalies_375m_All', { TIME: dia(1), opacity: 1 }));
+  grupoFocos.addLayer(capaWMS('VIIRS_SNPP_Thermal_Anomalies_375m_All', { TIME: dia(0), opacity: 1 }));
+  document.getElementById('horaSat').textContent = 'Satélite GOES: ' + hora(new Date(t).getTime());
+}
+
+/* =================== RADAR (RainViewer) =================== */
+const grupoRadar = L.layerGroup().addTo(mapa);
+const cobertura = L.tileLayer('https://tilecache.rainviewer.com/v2/coverage/0/256/{z}/{x}/{y}/0/0_0.png', { opacity: .45, maxNativeZoom: 7, maxZoom: 20 });
+let frames = [], timer = null, idx = 0, opRadar = .8;
+async function cargarRadar() {
+  const info = document.getElementById('horaRadar');
+  try {
+    const r = await (await fetch('https://api.rainviewer.com/public/weather-maps.json')).json();
+    const jugando = !!timer; detener(); grupoRadar.clearLayers(); frames = [];
+    r.radar.past.forEach(f => {
+      const c = L.tileLayer(r.host + f.path + '/256/{z}/{x}/{y}/2/1_1.png', { opacity: 0, maxNativeZoom: 7, maxZoom: 20,
+        attribution: '<a href="https://www.rainviewer.com" target="_blank">Weather data by RainViewer</a>' });
+      c.ms = f.time * 1000; grupoRadar.addLayer(c); frames.push(c);
+    });
+    idx = frames.length - 1; mostrar(idx); if (jugando) animar();
+  } catch (e) { info.textContent = 'Radar no disponible ahora'; }
+}
+function mostrar(i) { frames.forEach(f => f.setOpacity(0)); if (frames[i]) { frames[i].setOpacity(opRadar); document.getElementById('horaRadar').textContent = 'Radar: ' + hora(frames[i].ms); } }
+function animar() { if (timer) return detener(); document.getElementById('btnAnimar').textContent = '⏸ Detener'; idx = 0; mostrar(0); timer = setInterval(() => { idx = (idx + 1) % frames.length; mostrar(idx); }, 800); }
+function detener() { if (timer) { clearInterval(timer); timer = null; } document.getElementById('btnAnimar').textContent = '▶ Animar radar'; }
+
+/* =================== VIENTO Y TEMPERATURA MEDIDOS (METAR) =================== */
+const grupoMetar = L.layerGroup().addTo(mapa);
+async function cargarMetar() {
+  const el = document.getElementById('metarEstado');
+  try {
+    const datos = await (await fetch('https://aviationweather.gov/api/data/metar?format=json&hours=2&ids=SLCB,SLLP,SLVR,SLOR,SLSU,SLTJ,SLPO,SLTR')).json();
+    grupoMetar.clearLayers(); const u = {};
+    datos.forEach(m => { if (!u[m.icaoId] || m.obsTime > u[m.icaoId].obsTime) u[m.icaoId] = m; });
+    Object.values(u).forEach(m => {
+      const kmh = Math.round((m.wspd || 0) * 1.852), raf = m.wgst ? Math.round(m.wgst * 1.852) : null, dir = m.wdir === 'VRB' ? null : m.wdir;
+      L.marker([m.lat, m.lon], { icon: flecha(kmh, dir) }).addTo(grupoMetar)
+        .bindTooltip(m.temp + ' °C · ' + kmh + ' km/h', { permanent: true, direction: 'right', className: 'etq' })
+        .bindPopup('<b>' + m.icaoId + ' ' + (m.name || '') + '</b><br>Viento medido: ' + kmh + ' km/h ' + (dir == null ? '(variable)' : 'desde ' + rumbo(dir)) +
+          (raf ? '<br>Ráfagas: ' + raf + ' km/h' : '') + '<br>Temperatura: ' + m.temp + ' °C<br>Observado: ' + hora(m.obsTime * 1000));
+    });
+    el.textContent = Object.keys(u).length + ' aeropuertos con dato reciente.';
+  } catch (e) { el.textContent = 'No se pudo leer el viento medido (posible bloqueo CORS: pídalo desde su servidor).'; }
+}
+
+/* =================== SU PROPIA ESTACIÓN (opcional) =================== */
+const grupoEst = L.layerGroup().addTo(mapa);
+async function cargarEstacion() {
+  if (!ESTACION_URL) return;
+  try {
+    const e = await (await fetch(ESTACION_URL)).json();
+    grupoEst.clearLayers();
+    L.marker([e.lat, e.lon], { icon: flecha(e.viento_kmh, e.dir) }).addTo(grupoEst)
+      .bindTooltip(e.temp + ' °C · ' + e.viento_kmh + ' km/h', { permanent: true, direction: 'right', className: 'etq' })
+      .bindPopup('<b>Estación propia</b><br>Temp: ' + e.temp + ' °C<br>Humedad: ' + e.hum + ' %<br>Viento: ' + e.viento_kmh + ' km/h ' + rumbo(e.dir) +
+        '<br>Ráfagas: ' + e.rafaga_kmh + ' km/h<br>' + hora(e.hora));
+  } catch (err) { console.warn('Estación no disponible', err); }
+}
+
+/* =================== VIENTO Y TEMPERATURA DE MODELO (ESTIMADO, no medido) =================== */
+const grupoModelo = L.layerGroup();
+async function cargarModelo() {
+  if (!mapa.hasLayer(grupoModelo)) return;
+  const b = mapa.getBounds().pad(-.08), cols = 6, filas = 4, la = [], lo = [];
+  for (let i = 0; i < filas; i++) for (let j = 0; j < cols; j++) {
+    la.push((b.getSouth() + (b.getNorth() - b.getSouth()) * i / (filas - 1)).toFixed(3));
+    lo.push((b.getWest() + (b.getEast() - b.getWest()) * j / (cols - 1)).toFixed(3));
+  }
+  try {
+    let d = await (await fetch('https://api.open-meteo.com/v1/forecast?wind_speed_unit=kmh&current=temperature_2m,wind_speed_10m,wind_direction_10m,wind_gusts_10m&latitude=' + la.join(',') + '&longitude=' + lo.join(','))).json();
+    if (!Array.isArray(d)) d = [d]; grupoModelo.clearLayers();
+    d.forEach(p => { const c = p.current;
+      L.marker([p.latitude, p.longitude], { icon: flecha(c.wind_speed_10m, c.wind_direction_10m) }).addTo(grupoModelo)
+        .bindTooltip(c.temperature_2m + ' °C · ' + c.wind_speed_10m + ' km/h', { permanent: true, direction: 'right', className: 'etq' })
+        .bindPopup('<b>Dato de MODELO (estimado)</b><br>Viento: ' + c.wind_speed_10m + ' km/h desde ' + rumbo(c.wind_direction_10m) + '<br>Ráfagas: ' + c.wind_gusts_10m + ' km/h<br>Temp: ' + c.temperature_2m + ' °C'); });
+  } catch (e) { console.warn('Modelo no disponible', e); }
+}
+
+/* =================== PANEL =================== */
+const Panel = L.Control.extend({
+  options: { position: 'topright' },
+  onAdd() {
+    const d = L.DomUtil.create('div', 'panel');
+    d.innerHTML =
+      '<h4>Observado: lluvia</h4>' +
+      '<label><input type="checkbox" id="chkRadar" checked> Radar de lluvia</label>' +
+      '<label><input type="checkbox" id="chkCob"> Dónde hay radares (cobertura)</label>' +
+      '<div class="nota" id="horaRadar">Cargando radar…</div>' +
+      '<button id="btnAnimar">▶ Animar radar</button><button id="btnRef">↻ Actualizar</button>' +
+      '<h4>Observado: viento</h4>' +
+      '<label><input type="checkbox" id="chkMetar" checked> Aeropuertos (METAR)</label>' +
+      '<label><input type="checkbox" id="chkEst" checked> Mi estación (si está configurada)</label>' +
+      '<div class="nota" id="metarEstado"></div>' +
+      '<h4>Observado: calor (satélite)</h4>' +
+      '<label><input type="checkbox" id="chkFocos" checked> Focos de calor / incendios (VIIRS)</label>' +
+      '<label><input type="checkbox" id="chkIR"> Infrarrojo GOES (cada 10 min)</label>' +
+      '<label><input type="checkbox" id="chkLST"> Temperatura del suelo (MODIS, ayer)</label>' +
+      '<label><input type="checkbox" id="chkNubes"> Nubes y humo (GeoColor)</label>' +
+      'Transparencia capas satélite<input type="range" id="rngOp" min="0.2" max="1" step="0.05" value="0.65">' +
+      '<div class="nota" id="horaSat"></div>' +
+      '<h4 class="mod">Modelo (estimado, NO medido)</h4>' +
+      '<label><input type="checkbox" id="chkModelo"> Viento y temperatura por zona</label>' +
+      '<div class="nota">Es la única forma de tener viento en toda la zona, pero es una estimación, no una medición.</div>' +
+      '<h4>Otros</h4><label><input type="checkbox" id="chkEtiq" checked> Etiquetas</label>' +
+      '<div class="nota">Flechas apuntan hacia donde sopla. Color: azul &lt;10, verde &lt;20, amarillo &lt;30, naranja &lt;45, rojo ≥45 km/h.</div>';
+    L.DomEvent.disableClickPropagation(d); L.DomEvent.disableScrollPropagation(d);
+    return d;
+  }
+});
+mapa.addControl(new Panel());
+
+const alternar = (id, g) => document.getElementById(id).onchange = e => e.target.checked ? mapa.addLayer(g) : mapa.removeLayer(g);
+alternar('chkRadar', grupoRadar); alternar('chkCob', cobertura); alternar('chkMetar', grupoMetar); alternar('chkEst', grupoEst);
+alternar('chkFocos', grupoFocos); alternar('chkIR', grupoIR); alternar('chkLST', grupoLST); alternar('chkNubes', grupoNubes); alternar('chkEtiq', etiquetas);
+document.getElementById('chkModelo').onchange = e => { if (e.target.checked) { mapa.addLayer(grupoModelo); cargarModelo(); } else mapa.removeLayer(grupoModelo); };
+document.getElementById('rngOp').oninput = e => satLayers.forEach(l => { if (l.wmsParams.layers.indexOf('Thermal') < 0) l.setOpacity(+e.target.value); });
+document.getElementById('btnAnimar').onclick = animar;
+document.getElementById('btnRef').onclick = todo;
+
+function todo() { cargarRadar(); cargarSatelite(); cargarMetar(); cargarEstacion(); cargarModelo(); }
+todo(); setInterval(todo, REFRESCO_MIN * 60000);
+let espera; mapa.on('moveend', () => { clearTimeout(espera); espera = setTimeout(cargarModelo, 700); });
+</script>
+</body>
+</html>

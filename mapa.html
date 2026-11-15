@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<a href="SISTEMA WEB/monitoreo"></a>
+<a href="SISTEMA WEB/base"></a>
+<a href="base/radar.html"></a>
+<a href="monitoreo/monitor.html"></a>
+<a href="mapa.html"></a>
+<a href="simulador.html"></a>
+<a href="suelo tipo.html"></a>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cota 2750 - Mapa satelital y rutas ante incendio</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+html, body { height:100%; }
+body { font-family:Arial,sans-serif; background:#0b1a13; display:flex; flex-direction:column; }
+header { background:#123d2a; color:#fff; padding:10px 14px; display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; }
+header h2 { font-size:18px; }
+header p { margin-top:2px; font-size:12px; opacity:.85; }
+nav { display:flex; gap:6px; flex-wrap:wrap; }
+nav a { color:#fff; background:#1f6b47; padding:7px 12px; border-radius:6px; text-decoration:none; font-size:13px; }
+nav a:hover, nav a:focus-visible { background:#2a8a5c; }
+nav a.actual { background:#d35400; }
+#mapa { flex:1; width:100%; }
+footer { background:#123d2a; color:#fff; text-align:center; padding:8px; font-size:12px; }
+.panel { background:rgba(10,30,20,.94); color:#fff; padding:10px 12px; border-radius:8px; font-size:12px; box-shadow:0 2px 8px rgba(0,0,0,.5); width:300px; line-height:1.45; max-height:84vh; overflow:auto; }
+.panel h4 { font-size:13px; margin:9px 0 3px; color:#8fe3b5; }
+.panel h4:first-child { margin-top:0; }
+.panel select, .panel input[type=number] { width:100%; padding:5px; margin:2px 0; border-radius:4px; border:0; }
+.panel button { background:#1f6b47; color:#fff; border:0; padding:7px 10px; border-radius:5px; cursor:pointer; font-size:12px; margin:4px 4px 0 0; }
+.panel button.activo { background:#d35400; }
+.panel button.rojo { background:#c0392b; width:100%; margin-top:8px; padding:9px; font-size:13px; }
+.fila { display:flex; gap:6px; } .fila > * { flex:1; }
+#resultado { margin-top:8px; padding:8px; border-radius:6px; background:rgba(255,255,255,.08); font-size:12px; }
+#resultado b.mal { color:#ff8a80; } #resultado b.ok { color:#8fe3b5; }
+.ruta { margin-top:6px; padding:5px 7px; border-left:4px solid #888; background:rgba(255,255,255,.06); border-radius:4px; cursor:pointer; }
+.ruta.sel { background:rgba(255,255,255,.2); }
+.leyenda { margin-top:6px; font-size:10.5px; opacity:.9; }
+.aviso { margin-top:8px; font-size:10.5px; opacity:.8; border-top:1px solid rgba(255,255,255,.2); padding-top:6px; }
+.emoji { font-size:24px; text-shadow:0 0 4px #000; line-height:1; }
+.eti { font:bold 11px Arial,sans-serif; color:#fff; background:rgba(10,30,20,.92); border:2px solid #fff; border-radius:10px; padding:1px 6px; white-space:nowrap; width:max-content; transform:translate(-50%,-50%); cursor:pointer; }
+@media (max-width:600px) { .panel { width:240px; } }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h2>MAPA SATELITAL Y RUTAS ANTE INCENDIO - COTA 2750</h2>
+    <p>Parque Nacional Tunari | Cochabamba - Bolivia</p>
+  </div>
+  <nav>
+    <a href="monitoreo/monitor.html">Monitoreo</a>
+    <a href="base/radar.html">Radar</a>
+    <a href="mapa.html">Mapa</a>
+    <a href="rutas.html" class="actual" aria-current="page">Rutas</a>
+    <a href="simulador.html">Simulador</a>
+    <a href="suelo%20tipo.html">Tipo de suelo</a>
+  </nav>
+</header>
+<div id="mapa"></div>
+<footer>Sistema de monitoreo y prevención de incendios forestales</footer>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+/* =================== CONFIGURACIÓN =================== */
+const $ = id => document.getElementById(id);
+const centro = [-17.30, -66.28];
+const RUTEO = { auto: 'https://router.project-osrm.org', pie: 'https://routing.openstreetmap.de/routed-foot' };
+// radio: zona de peligro (m) | v: velocidad de avance del frente con viento en calma (m/min) | modo: qué hacer
+const RIESGO = {
+  bajo:    { radio: 200,  v: 3,  modo: 'ataque', color: '#f1c40f', nombre: 'Bajo' },
+  medio:   { radio: 400,  v: 8,  modo: 'ataque', color: '#e67e22', nombre: 'Medio' },
+  alto:    { radio: 800,  v: 25, modo: 'escape', color: '#e74c3c', nombre: 'Alto' },
+  extremo: { radio: 1500, v: 50, modo: 'escape', color: '#8e0000', nombre: 'Extremo' }
+};
+const COL = { seguro: '#2ecc71', precaucion: '#f39c12', riesgoso: '#e74c3c' };
+const NIV = { seguro: 0, precaucion: 1, riesgoso: 2 };
+const NOM = { seguro: 'Seguro', precaucion: 'Precaución', riesgoso: 'Riesgoso' };
+const V_CAMINAR = 42; // m/min a campo traviesa (~2.5 km/h, en ladera puede ser menos)
+const LADOS = ['Norte', 'Noreste', 'Este', 'Sureste', 'Sur', 'Suroeste', 'Oeste', 'Noroeste'];
+const lado = b => LADOS[Math.round((((b % 360) + 360) % 360) / 45) % 8];
+
+/* =================== MAPA SATELITAL =================== */
+const esri = 'https://server.arcgisonline.com/ArcGIS/rest/services/';
+const satelite = L.tileLayer(esri + 'World_Imagery/MapServer/tile/{z}/{y}/{x}', { attribution: '© Esri, Maxar, Earthstar Geographics', maxZoom: 20, maxNativeZoom: 18 });
+const etiquetas = L.tileLayer(esri + 'Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}', { maxZoom: 20, maxNativeZoom: 18 });
+const lugares = L.tileLayer(esri + 'Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', { maxZoom: 20, maxNativeZoom: 18 });
+const mapa = L.map('mapa', { center: centro, zoom: 13, layers: [satelite, etiquetas, lugares], zoomControl: false, maxZoom: 20 });
+L.control.zoom({ position: 'topleft' }).addTo(mapa);
+L.control.scale({ metric: true, imperial: false }).addTo(mapa);
+
+const gSector = L.layerGroup().addTo(mapa);
+L.marker(centro).addTo(gSector).bindPopup('<b>Sector de estudio - Cota 2750</b>').openPopup();
+
+// Focos de calor reales del satélite (NASA, ayer y hoy)
+const dia = n => new Date(Date.now() - n * 86400000).toISOString().slice(0, 10);
+const gFocos = L.layerGroup().addTo(mapa);
+[1, 0].forEach(n => L.tileLayer.wms('https://gibs.earthdata.nasa.gov/wms/epsg3857/best/wms.cgi',
+  { layers: 'VIIRS_SNPP_Thermal_Anomalies_375m_All', format: 'image/png', transparent: true, TIME: dia(n), maxZoom: 20, attribution: 'NASA GIBS / VIIRS' }).addTo(gFocos));
+
+/* =================== GEOMETRÍA =================== */
+const R = 6371000, rad = d => d * Math.PI / 180, deg = r => r * 180 / Math.PI;
+function dist(a, b) { const dLa = rad(b.lat - a.lat), dLo = rad(b.lng - a.lng);
+  const h = Math.sin(dLa / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLo / 2) ** 2; return 2 * R * Math.asin(Math.sqrt(h)); }
+function rumboEntre(a, b) { const y = Math.sin(rad(b.lng - a.lng)) * Math.cos(rad(b.lat));
+  const x = Math.cos(rad(a.lat)) * Math.sin(rad(b.lat)) - Math.sin(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.cos(rad(b.lng - a.lng)); return ((deg(Math.atan2(y, x)) + 360) % 360) || 0; }
+function destino(p, rumbo, m) { const br = rad(rumbo), d = m / R, la1 = rad(p.lat), lo1 = rad(p.lng);
+  const la2 = Math.asin(Math.sin(la1) * Math.cos(d) + Math.cos(la1) * Math.sin(d) * Math.cos(br));
+  const lo2 = lo1 + Math.atan2(Math.sin(br) * Math.sin(d) * Math.cos(la1), Math.cos(d) - Math.sin(la1) * Math.sin(la2));
+  return { lat: deg(la2), lng: deg(lo2) }; }
+const difAng = (a, b) => { const d = Math.abs(a - b) % 360; return d > 180 ? 360 - d : d; };
+const fmtKm = m => m >= 1000 ? (m / 1000).toFixed(1) + ' km' : Math.round(m) + ' m';
+const fmtMin = s => Math.max(1, Math.round(s / 60)) + ' min';
+function enPoli(p, poly) { let d = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) { const a = poly[i], b = poly[j];
+    if ((a[1] > p.lng) !== (b[1] > p.lng) && p.lat < (b[0] - a[0]) * (p.lng - a[1]) / (b[1] - a[1]) + a[0]) d = !d; }
+  return d; }
+
+/* =================== ESTADO Y CAPAS =================== */
+let fuego = null, yo = null, modo = null, sim = null;
+const gZonas = L.layerGroup().addTo(mapa), gRutas = L.layerGroup().addTo(mapa), gBases = L.layerGroup().addTo(mapa), gPuntos = L.layerGroup().addTo(mapa);
+const emoji = (e, s) => L.divIcon({ className: '', html: '<div class="emoji">' + e + '</div>', iconSize: [s || 26, s || 26], iconAnchor: [(s || 26) / 2, (s || 26) / 2] });
+const etiqueta = (txt, color) => L.divIcon({ className: '', iconSize: [0, 0], html: '<div class="eti" style="border-color:' + (color || '#fff') + '">' + txt + '</div>' });
+
+L.control.layers(null, {
+  'Calles y etiquetas': etiquetas, 'Lugares': lugares, 'Sector de estudio': gSector, 'Focos de calor NASA': gFocos,
+  'Zonas y avance del fuego': gZonas, 'Rutas': gRutas, 'Bomberos y hospitales': gBases, 'Puntos marcados': gPuntos
+}, { position: 'bottomleft', collapsed: true }).addTo(mapa);
+
+function refrescarPuntos() {
+  gPuntos.clearLayers();
+  if (fuego) L.marker(fuego, { icon: emoji('🔥', 30) }).addTo(gPuntos).bindPopup('Foco de incendio');
+  if (yo) L.marker(yo, { icon: emoji('📍', 28) }).addTo(gPuntos).bindPopup('Mi ubicación / punto de salida');
+}
+function ponerPunto(tipo, ll) {
+  if (tipo === 'fuego') fuego = ll; else yo = ll;
+  refrescarPuntos(); gRutas.clearLayers(); rutasCalc = []; dibujarZonas();
+}
+
+/* =================== MODELO DE AVANCE DEL FUEGO =================== */
+function params() {
+  const r = RIESGO[$('riesgo').value], vel = +$('vel').value || 0, viene = +$('viento').value;
+  return { r, viene, abajo: (viene + 180) % 360, vel, vh: r.v * (1 + vel / 30) };
+}
+// velocidad (m/min) del frente en un rumbo: máxima a favor del viento, mínima en contra
+const vDir = (P, brg) => P.vh * (0.12 + 0.88 * Math.pow((1 + Math.cos(rad(difAng(brg, P.abajo)))) / 2, 1.5));
+// minutos hasta que el fuego llega a un punto (usa la simulación si existe)
+function tFuego(p, P) {
+  if (sim) {
+    if (sim.actual && enPoli(p, sim.actual)) return 0;
+    for (const f of sim.frames) if (enPoli(p, f.poly)) return f.min;
+    return 999;
+  }
+  const d = dist(fuego, p); if (d <= 30) return 0;
+  return (d - 30) / vDir(P, rumboEntre(fuego, p));
+}
+function contorno(P, t) { const o = []; for (let b = 0; b < 360; b += 15) { const q = destino(fuego, b, 30 + vDir(P, b) * t); o.push([q.lat, q.lng]); } return o; }
+
+function dibujarZonas() {
+  gZonas.clearLayers(); if (!fuego) return;
+  const P = params();
+  L.circle(fuego, { radius: P.r.radio, color: P.r.color, weight: 2, fillColor: P.r.color, fillOpacity: .15 }).addTo(gZonas).bindPopup('Zona de peligro (' + P.r.radio + ' m)');
+  const frames = sim ? sim.frames.map(f => ({ min: f.min, pts: f.poly })) : [15, 30, 60].map(t => ({ min: t, pts: contorno(P, t) }));
+  frames.forEach((f, i) => {
+    L.polygon(f.pts, { color: P.r.color, weight: i ? 1 : 2, dashArray: '6 5', fillColor: P.r.color, fillOpacity: .08 }).addTo(gZonas)
+      .bindTooltip('Fuego a los ' + f.min + ' min' + (sim ? ' (simulación)' : ' (estimación simple según viento)'), { sticky: true });
+    const lejos = f.pts.reduce((m, p) => dist(fuego, { lat: p[0], lng: p[1] }) > dist(fuego, { lat: m[0], lng: m[1] }) ? p : m, f.pts[0]);
+    L.marker(lejos, { icon: etiqueta(f.min + ' min', P.r.color), interactive: false }).addTo(gZonas);
+  });
+  if (sim && sim.actual) L.polygon(sim.actual, { color: '#fff', weight: 2, fillOpacity: 0 }).addTo(gZonas).bindTooltip('Perímetro actual (simulación)', { sticky: true });
+}
+
+/* =================== BASES CERCANAS (OpenStreetMap) =================== */
+let cacheBases = null, cacheClave = '';
+async function cargarBases(p) {
+  const clave = p.lat.toFixed(1) + ',' + p.lng.toFixed(1);
+  if (cacheBases && cacheClave === clave) return cacheBases;
+  const q = '[out:json][timeout:25];(nwr["amenity"="fire_station"](around:40000,' + p.lat + ',' + p.lng + ');nwr["amenity"="hospital"](around:40000,' + p.lat + ',' + p.lng + '););out center tags;';
+  const r = await (await fetch('https://overpass-api.de/api/interpreter', { method: 'POST', body: 'data=' + encodeURIComponent(q) })).json();
+  cacheBases = r.elements.map(e => ({ nombre: (e.tags && e.tags.name) || (e.tags.amenity === 'fire_station' ? 'Estación de bomberos' : 'Hospital'),
+    tipo: e.tags.amenity, ll: { lat: e.lat || e.center.lat, lng: e.lon || e.center.lon } }));
+  cacheClave = clave; gBases.clearLayers();
+  cacheBases.forEach(b => L.marker(b.ll, { icon: emoji(b.tipo === 'fire_station' ? '🚒' : '🏥', 22) }).addTo(gBases).bindPopup('<b>' + b.nombre + '</b>'));
+  return cacheBases;
+}
+
+/* =================== RUTEO (con tramo a campo traviesa si está en el cerro) =================== */
+function tramo(a, b) { const n = Math.max(2, Math.ceil(dist(a, b) / 40)), o = [];
+  for (let i = 0; i <= n; i++) { const f = i / n; o.push({ lat: a.lat + (b.lat - a.lat) * f, lng: a.lng + (b.lng - a.lng) * f, c: true }); } return o; }
+async function ruta(a, b) {
+  const url = RUTEO[$('perfil').value] + '/route/v1/driving/' + a.lng + ',' + a.lat + ';' + b.lng + ',' + b.lat + '?overview=full&geometries=geojson';
+  const r = await (await fetch(url)).json();
+  if (!r.routes || !r.routes.length) throw new Error('sin ruta');
+  const x = r.routes[0]; let ll = x.geometry.coordinates.map(c => ({ lat: c[1], lng: c[0], c: false }));
+  const k = Math.ceil(ll.length / 150); ll = ll.filter((p, i) => i % k === 0 || i === ll.length - 1);
+  let dur = x.duration, d = x.distance, campoIni = 0, campoFin = 0;
+  const dA = (r.waypoints[0] && r.waypoints[0].distance) || 0, dB = (r.waypoints[1] && r.waypoints[1].distance) || 0;
+  if (dA > 25) { campoIni = dA; ll = tramo(a, ll[0]).concat(ll); dur += dA / V_CAMINAR * 60; d += dA; }
+  if (dB > 25) { campoFin = dB; ll = ll.concat(tramo(ll[ll.length - 1], b)); dur += dB / V_CAMINAR * 60; d += dB; }
+  return { ll, dur, dist: d, campoIni, campoFin };
+}
+
+// Clasifica cada punto de la ruta: ¿llegará el fuego antes o después que yo?
+function analizar(x, P) {
+  const n = x.ll.length, cum = [0]; let ac = 0;
+  for (let i = 1; i < n; i++) { ac += dist(x.ll[i - 1], x.ll[i]); cum.push(ac); }
+  let peor = 'seguro', minM = Infinity;
+  x.ll.forEach((p, i) => {
+    const t = (ac ? cum[i] / ac : 0) * x.dur / 60, d = dist(fuego, p), m = tFuego(p, P) - t;
+    p.n = (m < 5 || d < P.r.radio * 0.5) ? 'riesgoso' : (m < 20 || d < P.r.radio) ? 'precaucion' : 'seguro';
+    minM = Math.min(minM, m); if (NIV[p.n] > NIV[peor]) peor = p.n;
+  });
+  const k = x.ll.findIndex(p => dist(x.ll[0], p) >= 100), ult = x.ll[n - 1];
+  x.nivel = peor; x.margen = minM;
+  x.rumbo = rumboEntre(x.ll[0], x.ll[k < 0 ? n - 1 : k]); x.ladoFuego = lado(rumboEntre(fuego, ult));
+  const mt = x.margen >= 240 ? 'El fuego no la alcanza en el tiempo estimado.' : x.margen < 0 ? 'El fuego llega antes que usted a un tramo.' : 'Margen mínimo frente al fuego: ' + Math.round(x.margen) + ' min.';
+  x.texto = (x.origen ? 'Desde ' + x.origen + ' ' : '') + 'hacia ' + x.dest.nombre + '. Sale rumbo ' + lado(x.rumbo) + ' y llega por el lado ' + x.ladoFuego + ' del fuego.' +
+    ((x.campoIni + x.campoFin) > 25 ? ' Incluye ' + fmtKm(x.campoIni + x.campoFin) + ' a campo traviesa (punteado).' : '') + ' ' + mt;
+  return x;
+}
+
+/* =================== DIBUJO DE RUTAS =================== */
+let rutasCalc = [], sel = 0, cabecera = '';
+function pintar(x, i, activa) {
+  const g = L.layerGroup().addTo(gRutas), w = activa ? 7 : 4, op = activa ? 1 : .55;
+  const runs = []; let cur = null;
+  for (let j = 1; j < x.ll.length; j++) {
+    const a = x.ll[j - 1], b = x.ll[j], n = NIV[a.n] >= NIV[b.n] ? a.n : b.n, c = a.c && b.c;
+    if (cur && cur.n === n && cur.c === c) cur.pts.push([b.lat, b.lng]); else { cur = { n, c, pts: [[a.lat, a.lng], [b.lat, b.lng]] }; runs.push(cur); }
+  }
+  runs.forEach(u => L.polyline(u.pts, { color: COL[u.n], weight: w, opacity: op, dashArray: u.c ? '3 9' : null }).addTo(g));
+  const mid = x.ll[Math.floor(x.ll.length / 2)];
+  L.marker(mid, { icon: etiqueta(String.fromCharCode(65 + i) + ' · ' + fmtMin(x.dur) + ' · ' + NOM[x.nivel], COL[x.nivel]), zIndexOffset: activa ? 1000 : 0 })
+    .addTo(g).on('click', () => seleccionar(i));
+  if (x.dest.extra) L.marker(x.dest.ll, { icon: emoji(x.dest.ico || '🚩', 24) }).addTo(g).bindPopup(x.dest.nombre);
+}
+function mostrar(fit) {
+  gRutas.clearLayers();
+  rutasCalc.forEach((x, i) => { if (i !== sel) pintar(x, i, false); });
+  if (rutasCalc[sel]) pintar(rutasCalc[sel], sel, true);
+  msg(cabecera + rutasCalc.map((x, i) => '<div class="ruta' + (i === sel ? ' sel' : '') + '" data-i="' + i + '" style="border-color:' + COL[x.nivel] + '"><b style="color:' + COL[x.nivel] + '">' +
+    String.fromCharCode(65 + i) + '. ' + NOM[x.nivel] + '</b> · ' + fmtMin(x.dur) + ' · ' + fmtKm(x.dist) + '<br>' + x.texto + '</div>').join('') +
+    '<div class="leyenda"><span style="color:#2ecc71">■</span> Seguro <span style="color:#f39c12">■</span> Precaución <span style="color:#e74c3c">■</span> Riesgoso · punteado = a campo traviesa. Toque una ruta para elegirla.</div>');
+  if (fit && rutasCalc[sel]) mapa.fitBounds(L.latLngBounds(rutasCalc[sel].ll.map(p => [p.lat, p.lng]).concat([[fuego.lat, fuego.lng]])).pad(.15));
+}
+function seleccionar(i) { sel = i; mostrar(false); }
+const msg = h => $('resultado').innerHTML = h;
+
+/* =================== CÁLCULO SEGÚN RIESGO Y TIEMPO =================== */
+let token = 0;
+async function calcular(silencioso) {
+  if (!fuego) return msg('<b class="mal">Primero marque el foco de incendio en el mapa.</b>');
+  const P = params(), yo0 = $('perfil').value, previo = rutasCalc[sel] && rutasCalc[sel].dest.nombre, mi = ++token;
+  if (!silencioso) { gRutas.clearLayers(); msg('Calculando rutas…'); }
+  dibujarZonas();
+  try {
+    const bases = await cargarBases(fuego).catch(() => []);
+    const ataque = P.r.modo === 'ataque';
+    let cand = [];
+    if (ataque) {
+      const ori = yo ? [{ nombre: 'su ubicación', ll: yo }] : bases.filter(b => b.tipo === 'fire_station').sort((a, b) => dist(a.ll, fuego) - dist(b.ll, fuego)).slice(0, 2).map(b => ({ nombre: b.nombre, ll: b.ll }));
+      if (!ori.length) return msg('<b class="mal">No encontré estaciones de bomberos cercanas.</b> Marque "Mi ubicación" como punto de salida.');
+      [0, -40, 40].forEach(o => { const b = (P.viene + o + 360) % 360; const s = destino(fuego, b, P.r.radio + 100);
+        ori.forEach(or => cand.push({ or: or.nombre, a: or.ll, dest: { nombre: 'el punto de aproximación del lado ' + lado(b), ll: s, ico: '🎯', extra: true } })); });
+    } else {
+      if (!yo) return msg('<b class="mal">Para calcular el escape marque su ubicación</b> (botón "Mi ubicación" o clic en el mapa).');
+      bases.map(b => ({ nombre: b.nombre, ll: b.ll, ico: b.tipo === 'fire_station' ? '🚒' : '🏥', d: dist(b.ll, fuego), ang: difAng(rumboEntre(fuego, b.ll), P.abajo) }))
+        .filter(b => b.d >= P.r.radio * 1.5).sort((a, b) => ((a.ang < 60) - (b.ang < 60)) || dist(yo, a.ll) - dist(yo, b.ll)).slice(0, 4)
+        .forEach(b => cand.push({ a: yo, dest: b }));
+      const dr = Math.max(P.r.radio * 2.5, 1200);
+      [P.viene, (P.viene + 90) % 360, (P.viene + 270) % 360].forEach(b => cand.push({ a: yo, dest: { nombre: 'un refugio al ' + lado(b) + ' del fuego (sin camino conocido, verifique)', ll: destino(fuego, b, dr), ico: '🚩', extra: true } }));
+    }
+    const rs = await Promise.allSettled(cand.map(c => ruta(c.a, c.dest.ll).then(x => ({ ...x, dest: c.dest, origen: c.or }))));
+    if (mi !== token) return;
+    const ok = rs.filter(r => r.status === 'fulfilled').map(r => analizar(r.value, P));
+    if (!ok.length) throw new Error('sin rutas');
+    ok.sort((a, b) => NIV[a.nivel] - NIV[b.nivel] || a.dur - b.dur);
+    rutasCalc = ok.slice(0, 6);
+    const k = silencioso ? rutasCalc.findIndex(x => x.dest.nombre === previo) : -1; sel = k < 0 ? 0 : k;
+    const mejor = rutasCalc[0], av = [];
+    if (yo && dist(yo, fuego) < P.r.radio) av.push('<b class="mal">Está DENTRO de la zona de peligro.</b> Salga ya, hacia los costados del viento (rumbos ' + Math.round((P.viene + 90) % 360) + '° o ' + Math.round((P.viene + 270) % 360) + '°).');
+    if (yo && mejor.campoIni > 25) av.push('<b>Está en el cerro, fuera de camino:</b> el camino más cercano está a ' + fmtKm(mejor.campoIni) + ' (~' + fmtMin(mejor.campoIni / V_CAMINAR * 60) + ' a pie). Revise pendiente y quebradas antes de cruzar.');
+    if (mejor.nivel === 'riesgoso') av.push('<b class="mal">Ninguna ruta es segura ahora.</b> Se muestran ordenadas de menor a mayor riesgo; evalúe moverse por los costados del viento.');
+    cabecera = (av.length ? av.join('<br>') + '<br>' : '') + '<b class="ok">Riesgo ' + P.r.nombre + ': rutas de ' + (ataque ? 'ATAQUE' : 'ESCAPE') + (sim ? ' (según simulación)' : '') + '</b><br>' +
+      (ataque ? 'Entre por el lado de donde viene el viento y mantenga siempre una retirada hacia zona quemada o despejada. Si el riesgo sube, cambie a "Alto".'
+              : 'No ataque el fuego. No suba hacia él ni se desvíe hacia donde sopla el viento (' + Math.round(P.abajo) + '°). Avise a bomberos y a las personas del área.');
+    mostrar(!silencioso);
+  } catch (e) { msg('<b class="mal">No se pudo calcular la ruta.</b> Puede que el servicio de rutas no responda o no haya camino cercano. Avise a bomberos por radio o teléfono.'); console.warn(e); }
+}
+
+/* =================== SIMULACIÓN (viene de simulador.html) =================== */
+function setViento(d) {
+  const s = $('viento'); let o = [...s.options].find(x => +x.value === Math.round(d));
+  if (!o) { o = [...s.options].find(x => x.dataset.sim) || s.appendChild(document.createElement('option')); o.dataset.sim = 1; o.value = Math.round(d); o.textContent = 'Viene de ' + Math.round(d) + '° (' + lado(d) + ', simulación)'; }
+  s.value = o.value;
+}
+function aplicarSim(s) {
+  if (!s || (s.t && Date.now() - s.t > 6 * 3600000)) return;
+  const frames = (s.frames || []).filter(f => f.poligono && f.poligono.length > 2).map(f => ({ min: +f.min || 0, poly: f.poligono })).sort((a, b) => a.min - b.min);
+  const actual = s.perimetro && s.perimetro.length > 2 ? s.perimetro : null;
+  if (!frames.length && !actual) return;
+  sim = { frames, actual };
+  if (s.fuego) fuego = s.fuego; else if (!fuego) { const q = actual || frames[0].poly; fuego = { lat: q.reduce((t, p) => t + p[0], 0) / q.length, lng: q.reduce((t, p) => t + p[1], 0) / q.length }; }
+  if (s.viento) { setViento(s.viento.desde); $('vel').value = Math.round(s.viento.kmh || 0); }
+  if (s.riesgo && RIESGO[s.riesgo]) $('riesgo').value = s.riesgo;
+  $('simEstado').textContent = 'Simulación activa (' + frames.length + ' pasos). Las rutas se recalculan solas.';
+  refrescarPuntos(); dibujarZonas(); calcular(true);
+}
+
+/* =================== PANEL =================== */
+const Panel = L.Control.extend({
+  options: { position: 'topright' },
+  onAdd() {
+    const d = L.DomUtil.create('div', 'panel');
+    d.innerHTML =
+      '<h4>1. Puntos</h4><div class="fila"><button id="bFuego">🔥 Marcar foco</button><button id="bYo">📍 Marcar salida</button></div>' +
+      '<button id="bGPS">◎ Usar mi ubicación (GPS)</button>' +
+      '<div class="aviso" style="border:0;padding:0;margin-top:3px">Pulse un botón y luego haga clic en el mapa. Puede marcar su salida en el cerro, aunque no haya camino.</div>' +
+      '<h4>2. Riesgo del fuego</h4>' +
+      '<select id="riesgo"><option value="bajo">Bajo - fuego pequeño, controlable</option><option value="medio">Medio - crece, aún atacable</option>' +
+      '<option value="alto" selected>Alto - avance rápido, escapar</option><option value="extremo">Extremo - fuera de control, escapar</option></select>' +
+      '<h4>3. Viento</h4>' +
+      '<select id="viento"><option value="0">Viene del Norte</option><option value="45">Viene del Noreste</option><option value="90">Viene del Este</option><option value="135">Viene del Sureste</option><option value="180">Viene del Sur</option><option value="225">Viene del Suroeste</option><option value="270" selected>Viene del Oeste</option><option value="315">Viene del Noroeste</option></select>' +
+      '<input type="number" id="vel" value="15" min="0" max="120" placeholder="km/h"> <div class="aviso" style="border:0;padding:0">Velocidad en km/h</div>' +
+      '<button id="bViento">Usar viento medido (aeropuerto Cochabamba)</button>' +
+      '<h4>4. Medio</h4><select id="perfil"><option value="auto">Vehículo</option><option value="pie">A pie</option></select>' +
+      '<h4>5. Tiempo real y simulación</h4>' +
+      '<button id="bRT">◉ Activar tiempo real</button><button id="bQuitarSim">Quitar simulación</button>' +
+      '<div class="aviso" style="border:0;padding:0" id="rtEstado">Tiempo real: apagado</div>' +
+      '<div class="aviso" style="border:0;padding:0;margin-top:2px" id="simEstado">Sin simulación: se usa una estimación simple según viento y riesgo.</div>' +
+      '<button class="rojo" id="bCalc">CALCULAR RUTAS</button><div id="resultado">Marque el foco y su ubicación.</div>' +
+      '<div class="aviso">Herramienta de apoyo. No reemplaza a bomberos ni a las autoridades. Los tiempos del fuego son estimaciones; las rutas vienen de OpenStreetMap y no saben de cierres, humo ni caminos intransitables: la decisión final es de quien está en el terreno. Para enfrentar fuego se necesita capacitación y equipo.</div>';
+    L.DomEvent.disableClickPropagation(d); L.DomEvent.disableScrollPropagation(d);
+    return d;
+  }
+});
+mapa.addControl(new Panel());
+
+function activar(m) { modo = modo === m ? null : m; $('bFuego').classList.toggle('activo', modo === 'fuego'); $('bYo').classList.toggle('activo', modo === 'yo'); mapa.getContainer().style.cursor = modo ? 'crosshair' : ''; }
+$('bFuego').onclick = () => activar('fuego'); $('bYo').onclick = () => activar('yo');
+mapa.on('click', e => { if (!modo) return; ponerPunto(modo, e.latlng); activar(modo); });
+$('bGPS').onclick = () => navigator.geolocation ? navigator.geolocation.getCurrentPosition(
+  p => { const ll = { lat: p.coords.latitude, lng: p.coords.longitude }; ponerPunto('yo', ll); mapa.setView(ll, 14); },
+  () => msg('<b class="mal">No se pudo obtener su ubicación.</b> Márquela con el botón "Marcar salida".')) : msg('Su navegador no tiene GPS.');
+['riesgo', 'viento', 'vel'].forEach(id => $(id).addEventListener('input', () => { dibujarZonas(); if (rutasCalc.length) calcular(true); }));
+$('resultado').onclick = e => { const r = e.target.closest('.ruta'); if (r) seleccionar(+r.dataset.i); };
+
+async function leerViento(silencioso) {
+  if (sim && silencioso) return;
+  try {
+    const m = (await (await fetch('https://aviationweather.gov/api/data/metar?format=json&hours=3&ids=SLCB')).json())[0];
+    const dir = m.wdir === 'VRB' ? null : m.wdir; $('vel').value = Math.round((m.wspd || 0) * 1.852);
+    if (dir != null) setViento(Math.round(dir / 45) * 45 % 360);
+    dibujarZonas(); if (!silencioso) msg('Viento medido en el aeropuerto: ' + $('vel').value + ' km/h ' + (dir == null ? '(dirección variable, elija a mano)' : 'desde ' + dir + '°') + '. Puede diferir en la montaña.');
+  } catch (e) { if (!silencioso) msg('<b class="mal">No se pudo leer el viento medido.</b> Elija dirección y velocidad a mano.'); }
+}
+$('bViento').onclick = () => leerViento(false);
+$('bCalc').onclick = () => calcular(false);
+
+/* Tiempo real: sigue su GPS, renueva el viento cada 10 min y recalcula cada 30 s */
+let rt = null, gpsId = null, ticks = 0;
+$('bRT').onclick = () => {
+  if (rt) { clearInterval(rt); rt = null; if (gpsId != null) navigator.geolocation.clearWatch(gpsId); gpsId = null;
+    $('bRT').classList.remove('activo'); $('rtEstado').textContent = 'Tiempo real: apagado'; return; }
+  $('bRT').classList.add('activo'); $('rtEstado').textContent = 'Tiempo real: activo (GPS, viento cada 10 min, rutas cada 30 s)';
+  if (navigator.geolocation) gpsId = navigator.geolocation.watchPosition(p => {
+    const ll = { lat: p.coords.latitude, lng: p.coords.longitude }; if (!yo || dist(yo, ll) > 25) { yo = ll; refrescarPuntos(); } }, () => {}, { enableHighAccuracy: true, maximumAge: 5000 });
+  rt = setInterval(() => { ticks++; if (ticks % 20 === 0) leerViento(true); if (fuego) calcular(true); }, 30000);
+};
+$('bQuitarSim').onclick = () => { sim = null; try { localStorage.removeItem('cota2750_simulacion'); } catch (e) {}
+  $('simEstado').textContent = 'Sin simulación: se usa una estimación simple según viento y riesgo.'; dibujarZonas(); if (rutasCalc.length) calcular(true); };
+
+// Recibe la simulación desde simulador.html (misma carpeta/servidor)
+try { aplicarSim(JSON.parse(localStorage.getItem('cota2750_simulacion'))); } catch (e) {}
+if ('BroadcastChannel' in window) new BroadcastChannel('cota2750').onmessage = e => aplicarSim(e.data);
+addEventListener('storage', e => { if (e.key === 'cota2750_simulacion' && e.newValue) { try { aplicarSim(JSON.parse(e.newValue)); } catch (_) {} } });
+</script>
+</body>
+</html>
